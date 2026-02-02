@@ -815,7 +815,10 @@ class MobileAgent(
                 // 3. 执行动作
                 log("执行动作: ${action.type}")
                 OverlayService.update("${action.type}...")
-                executeMAIUIAction(action, screenWidth, screenHeight)
+                // 传入截图尺寸用于坐标转换
+                val screenshotWidth = screenshot.width
+                val screenshotHeight = screenshot.height
+                executeMAIUIAction(action, screenWidth, screenHeight, screenshotWidth, screenshotHeight)
 
                 // 更新步骤状态
                 updateState {
@@ -852,16 +855,28 @@ class MobileAgent(
     private suspend fun executeMAIUIAction(
         action: com.roubao.autopilot.vlm.MAIUIAction,
         screenWidth: Int,
-        screenHeight: Int
+        screenHeight: Int,
+        screenshotWidth: Int,
+        screenshotHeight: Int
     ) = withContext(Dispatchers.IO) {
-        // 转换归一化坐标到屏幕像素
-        val screenAction = action.toScreenCoordinates(screenWidth, screenHeight)
+        // 计算缩放比例（截图尺寸 -> 实际屏幕尺寸）
+        val scaleX = screenWidth.toFloat() / screenshotWidth
+        val scaleY = screenHeight.toFloat() / screenshotHeight
+
+        val screenAction = action.copy(
+            x = action.x?.let { (it * scaleX).toFloat() },
+            y = action.y?.let { (it * scaleY).toFloat() },
+            startX = action.startX?.let { (it * scaleX).toFloat() },
+            startY = action.startY?.let { (it * scaleY).toFloat() },
+            endX = action.endX?.let { (it * scaleX).toFloat() },
+            endY = action.endY?.let { (it * scaleY).toFloat() }
+        )
 
         when (action.type) {
             "click" -> {
                 val x = screenAction.x?.toInt() ?: return@withContext
                 val y = screenAction.y?.toInt() ?: return@withContext
-                log("点击: ($x, $y)")
+                log("点击: ($x, $y) [缩放: ${String.format("%.2f", scaleX)}x${String.format("%.2f", scaleY)}, 截图:${screenshotWidth}x${screenshotHeight}]")
                 controller.tap(x, y)
             }
             "long_press" -> {
@@ -917,6 +932,11 @@ class MobileAgent(
                 val y2 = screenAction.endY?.toInt() ?: return@withContext
                 log("拖拽: ($x1, $y1) -> ($x2, $y2)")
                 controller.swipe(x1, y1, x2, y2, 500)
+            }
+            "launch" -> {
+                val appName = action.app ?: action.text ?: return@withContext
+                log("启动应用: $appName")
+                controller.openApp(appName)
             }
             "open" -> {
                 val appName = action.text ?: return@withContext

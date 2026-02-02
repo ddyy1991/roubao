@@ -10,6 +10,7 @@ import android.graphics.BitmapFactory
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.util.Log
 import com.roubao.autopilot.App
 import com.roubao.autopilot.IShellService
 import com.roubao.autopilot.service.ShellService
@@ -141,16 +142,21 @@ class DeviceController(private val context: Context? = null) {
 
     /**
      * 执行 shell 命令 (本地，无权限)
+     * 注意：普通应用无法执行需要权限的命令（如 input tap）
      */
     private fun execLocal(command: String): String {
+        Log.d("DeviceController", "execLocal 尝试执行: $command")
         return try {
             val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", command))
             val reader = BufferedReader(InputStreamReader(process.inputStream))
             val output = reader.readText()
             process.waitFor()
             reader.close()
+            Log.d("DeviceController", "execLocal 输出: ${output.take(100)}")
+            Log.d("DeviceController", "execLocal 退出码: ${process.exitValue()}")
             output
         } catch (e: Exception) {
+            Log.e("DeviceController", "execLocal 执行失败: ${e.message}", e)
             e.printStackTrace()
             ""
         }
@@ -160,11 +166,25 @@ class DeviceController(private val context: Context? = null) {
      * 执行 shell 命令 (通过 Shizuku)
      */
     private fun exec(command: String): String {
+        Log.d("DeviceController", "执行命令: $command")
         return try {
-            shellService?.exec(command) ?: execLocal(command)
+            if (shellService != null) {
+                Log.d("DeviceController", "使用 Shizuku 执行")
+                val result = shellService!!.exec(command)
+                Log.d("DeviceController", "Shizuku 返回: ${result.take(100)}")
+                result
+            } else {
+                Log.w("DeviceController", "Shizuku 不可用，使用本地执行")
+                val localResult = execLocal(command)
+                Log.d("DeviceController", "本地执行返回: ${localResult.take(100)}")
+                localResult
+            }
         } catch (e: Exception) {
+            Log.e("DeviceController", "命令执行异常: ${e.message}", e)
             e.printStackTrace()
-            execLocal(command)
+            val fallback = execLocal(command)
+            Log.d("DeviceController", "降级本地执行返回: ${fallback.take(100)}")
+            fallback
         }
     }
 
@@ -172,7 +192,17 @@ class DeviceController(private val context: Context? = null) {
      * 点击屏幕
      */
     fun tap(x: Int, y: Int) {
-        exec("input tap $x $y")
+        val command = "input tap $x $y"
+        Log.e("DeviceController", "执行点击: ($x, $y)")
+        Log.d("DeviceController", "命令: $command")
+        Log.d("DeviceController", "Shizuku可用: ${isAvailable()}")
+
+        val result = exec(command)
+        if (result.isNotEmpty()) {
+            Log.d("DeviceController", "命令返回: $result")
+        } else {
+            Log.d("DeviceController", "命令执行完成（无返回）")
+        }
     }
 
     /**

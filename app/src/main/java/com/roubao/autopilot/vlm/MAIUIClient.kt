@@ -262,9 +262,28 @@ For each function call, return the thinking process in <thinking> </thinking> ta
 
         // 提取 thinking
         val thinkingRegex = Regex("<thinking>(.*?)</thinking>", RegexOption.DOT_MATCHES_ALL)
-        val thinking = thinkingRegex.find(processedText)?.groupValues?.get(1)?.trim() ?: ""
+        val thinkingMatch = thinkingRegex.find(processedText)
+        val thinking = thinkingMatch?.groupValues?.get(1)?.trim() ?: ""
 
-        // 提取 tool_call
+        // 如果没有 <thinking> 标签，尝试提取整个文本作为思考（除了 do() 部分）
+        val finalThinking = if (thinking.isEmpty()) {
+            val doIndex = processedText.indexOf("do(")
+            if (doIndex > 0) {
+                processedText.substring(0, doIndex).trim()
+            } else {
+                // 尝试从最后一行提取
+                val lines = processedText.split("\n")
+                if (lines.size > 1) {
+                    lines.dropLast(1).joinToString("\n").trim()
+                } else {
+                    ""
+                }
+            }
+        } else {
+            thinking
+        }
+
+        // 提取 tool_call (JSON 格式或 do() 格式)
         val toolCallRegex = Regex("<tool_call>\\s*(.+?)\\s*</tool_call>", RegexOption.DOT_MATCHES_ALL)
         val toolCallMatch = toolCallRegex.find(processedText)
 
@@ -276,13 +295,33 @@ For each function call, return the thinking process in <thinking> </thinking> ta
                 if (arguments != null) {
                     action = parseAction(arguments)
                 }
+
             } catch (e: Exception) {
                 println("[MAIUIClient] Failed to parse tool_call: ${e.message}")
             }
         }
 
+        // 如果 JSON 解析失败，尝试解析 do(action="...", app="...") 格式
+        if (action == null) {
+            val doRegex = Regex("""do\s*\(\s*action\s*=\s*"([^"]+)"\s*,\s*app\s*=\s*"([^"]+)"\s*\)""")
+            val doMatch = doRegex.find(processedText)
+            if (doMatch != null) {
+                try {
+                    val actionType = doMatch.groupValues[1]
+                    val appName = doMatch.groupValues[2]
+                    action = MAIUIAction(
+                        type = actionType.lowercase(),
+                        app = appName
+                    )
+                    println("[MAIUIClient] Parsed do() format: action=$actionType, app=$appName")
+                } catch (e: Exception) {
+                    println("[MAIUIClient] Failed to parse do() format: ${e.message}")
+                }
+            }
+        }
+
         return MAIUIResponse(
-            thinking = thinking,
+            thinking = finalThinking,
             action = action,
             rawResponse = text
         )
@@ -328,7 +367,8 @@ For each function call, return the thinking process in <thinking> </thinking> ta
             text = arguments.optString("text", null),
             button = arguments.optString("button", null),
             direction = arguments.optString("direction", null),
-            status = arguments.optString("status", null)
+            status = arguments.optString("status", null),
+            app = arguments.optString("app", null)
         )
     }
 
@@ -372,7 +412,8 @@ data class MAIUIAction(
     val text: String? = null,
     val button: String? = null,
     val direction: String? = null,  // swipe 方向: up, down, left, right
-    val status: String? = null      // terminate 状态: success, fail
+    val status: String? = null,     // terminate 状态: success, fail
+    val app: String? = null         // 要打开的应用名称（launch 动作）
 ) {
     /**
      * 转换为屏幕像素坐标

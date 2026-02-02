@@ -469,21 +469,52 @@ class MainActivity : ComponentActivity() {
 
         // 检查读取应用列表权限（适配 Android 11+）
         try {
-            val packageManager = packageManager
-            // 尝试查询所有已安装应用来验证权限
-            val appsQueryIntent = android.content.Intent(android.content.Intent.ACTION_MAIN)
-            appsQueryIntent.addCategory(android.content.Intent.CATEGORY_LAUNCHER)
-            val apps = packageManager.queryIntentActivities(appsQueryIntent, android.content.pm.PackageManager.MATCH_ALL)
+            val appScanner = App.getInstance().appScanner
+            // 强制刷新应用列表，确保获取最新数据
+            val allApps = appScanner.refreshApps()
+            val nonSystemApps = allApps.filter { !it.isSystem }
 
-            // 如果查询结果为空且是在 Android 11+ 上，可能需要引导用户
-            if ((apps.isEmpty()||apps.size==1)&& android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-                Toast.makeText(this, "需要读取应用列表权限才能正常工作", Toast.LENGTH_LONG).show()
-                // 引导用户到应用详情页面
-                val intent = android.content.Intent(
-                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                    Uri.parse("package:$packageName")
-                )
-                startActivity(intent)
+            Log.d(TAG, "应用列表检查: 总数=${allApps.size}, 非系统=${nonSystemApps.size}")
+
+            // 打印前5个应用名称用于调试
+            allApps.take(5).forEach {
+                Log.d(TAG, "  - ${it.appName} (${it.packageName}), 系统=${it.isSystem}")
+            }
+
+            // 如果非系统应用很少（通常只有应用自己）且是在 Android 11+ 上，说明受到包可见性限制
+            if (nonSystemApps.size <= 2 && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                Log.w(TAG, "应用列表受限，仅查询到 ${nonSystemApps.size} 个非系统应用")
+
+                // 显示警告对话框，说明限制
+                android.app.AlertDialog.Builder(this)
+                    .setTitle("应用列表权限受限")
+                    .setMessage("由于 Android 11+ 的包可见性限制，应用只能查询部分应用。\n\n" +
+                                "已查询到 ${nonSystemApps.size} 个非系统应用，这可能影响自动操作。\n\n" +
+                                "建议：\n" +
+                                "1. 确保应用已正确授予 Shizuku 权限\n" +
+                                "2. 部分操作可能仍能正常工作")
+                    .setPositiveButton("继续执行") { dialog, _ ->
+                        dialog.dismiss()
+                        // 继续执行，不 return
+                    }
+                    .setNegativeButton("取消") { dialog, _ ->
+                        dialog.dismiss()
+                        // 取消执行，重置状态
+                        isExecuting.value = false
+                    }
+                    .setNeutralButton("去设置") { dialog, _ ->
+                        dialog.dismiss()
+                        // 跳转到应用详情设置页面
+                        val intent = android.content.Intent(
+                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            Uri.parse("package:$packageName")
+                        )
+                        startActivity(intent)
+                        // 取消执行，重置状态
+                        isExecuting.value = false
+                    }
+                    .setCancelable(false)
+                    .show()
                 return
             }
         } catch (e: Exception) {
