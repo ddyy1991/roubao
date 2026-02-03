@@ -12,19 +12,22 @@ import android.os.IBinder
 import android.os.Looper
 import com.roubao.autopilot.App
 import com.roubao.autopilot.IShellService
+import com.roubao.autopilot.service.BaoziAccessibilityService
 import com.roubao.autopilot.service.ShellService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
 import rikka.shizuku.Shizuku
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
 
 /**
- * 设备控制器 - 通过 Shizuku UserService 执行 shell 命令
+ * 设备控制器 - 通过无障碍服务执行 UI 操作，通过 Shizuku 执行 shell 命令
  */
 class DeviceController(private val context: Context? = null) {
 
@@ -70,12 +73,19 @@ class DeviceController(private val context: Context? = null) {
      */
     fun bindService() {
         if (!isShizukuAvailable()) {
-            println("[DeviceController] Shizuku not available")
+            println("[DeviceController] Shizuku not available, cannot bind service")
             return
         }
         try {
+            println("[DeviceController] Attempting to bind UserService...")
+            if (serviceBound && shellService != null) {
+                println("[DeviceController] Service already bound, skipping")
+                return
+            }
             Shizuku.bindUserService(userServiceArgs, serviceConnection)
+            println("[DeviceController] UserService bind request sent")
         } catch (e: Exception) {
+            println("[DeviceController] Failed to bind UserService: ${e.message}")
             e.printStackTrace()
         }
     }
@@ -103,10 +113,11 @@ class DeviceController(private val context: Context? = null) {
     }
 
     /**
-     * 检查服务是否可用
+     * 检查服务是否可用（无障碍服务优先，降级到 Shizuku）
      */
     fun isAvailable(): Boolean {
-        return serviceBound && shellService != null
+        // 优先使用无障碍服务
+        return BaoziAccessibilityService.isServiceEnabled() || (serviceBound && shellService != null)
     }
 
     /**
@@ -161,39 +172,93 @@ class DeviceController(private val context: Context? = null) {
      */
     private fun exec(command: String): String {
         return try {
-            shellService?.exec(command) ?: execLocal(command)
+            if (shellService != null && serviceBound) {
+                println("[DeviceController] 通过 Shizuku 执行: $command")
+                val result = shellService?.exec(command) ?: ""
+                println("[DeviceController] Shizuku 执行结果: ${result.take(100)}")
+                result
+            } else {
+                println("[DeviceController] Shizuku 未绑定，使用本地执行: $command")
+                val result = execLocal(command)
+                println("[DeviceController] 本地执行结果: ${result.take(100)}")
+                result
+            }
         } catch (e: Exception) {
+            println("[DeviceController] 执行命令异常: ${e.message}")
             e.printStackTrace()
             execLocal(command)
         }
     }
 
     /**
-     * 点击屏幕
+     * 检查无障碍服务是否可用
+     */
+    fun isAccessibilityAvailable(): Boolean {
+        return BaoziAccessibilityService.isServiceEnabled()
+    }
+
+    /**
+     * 点击屏幕（使用无障碍服务）
      */
     fun tap(x: Int, y: Int) {
-        exec("input tap $x $y")
+        val accessibilityService = BaoziAccessibilityService.getInstance()
+        if (accessibilityService != null) {
+            println("[DeviceController] 使用无障碍服务点击: ($x, $y)")
+            accessibilityService.click(x.toFloat(), y.toFloat()) { success ->
+                println("[DeviceController] 点击${if (success) "成功" else "失败"}")
+            }
+        } else {
+            println("[DeviceController] 无障碍服务不可用，降级使用 Shizuku: ($x, $y)")
+            exec("input tap $x $y")
+        }
     }
 
     /**
-     * 长按
+     * 长按（使用无障碍服务）
      */
     fun longPress(x: Int, y: Int, durationMs: Int = 1000) {
-        exec("input swipe $x $y $x $y $durationMs")
+        val accessibilityService = BaoziAccessibilityService.getInstance()
+        if (accessibilityService != null) {
+            println("[DeviceController] 使用无障碍服务长按: ($x, $y), ${durationMs}ms")
+            accessibilityService.longPress(x.toFloat(), y.toFloat(), durationMs.toLong()) { success ->
+                println("[DeviceController] 长按${if (success) "成功" else "失败"}")
+            }
+        } else {
+            println("[DeviceController] 无障碍服务不可用，降级使用 Shizuku")
+            exec("input swipe $x $y $x $y $durationMs")
+        }
     }
 
     /**
-     * 双击
+     * 双击（使用无障碍服务）
      */
     fun doubleTap(x: Int, y: Int) {
-        exec("input tap $x $y && input tap $x $y")
+        val accessibilityService = BaoziAccessibilityService.getInstance()
+        if (accessibilityService != null) {
+            println("[DeviceController] 使用无障碍服务双击: ($x, $y)")
+            accessibilityService.doubleClick(x.toFloat(), y.toFloat()) { success ->
+                println("[DeviceController] 双击${if (success) "成功" else "失败"}")
+            }
+        } else {
+            println("[DeviceController] 无障碍服务不可用，降级使用 Shizuku")
+            exec("input tap $x $y && input tap $x $y")
+        }
     }
 
     /**
-     * 滑动
+     * 滑动（使用无障碍服务）
      */
     fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int = 500) {
-        exec("input swipe $x1 $y1 $x2 $y2 $durationMs")
+        val accessibilityService = BaoziAccessibilityService.getInstance()
+        if (accessibilityService != null) {
+            println("[DeviceController] 使用无障碍服务滑动: ($x1, $y1) -> ($x2, $y2), ${durationMs}ms")
+            accessibilityService.swipe(x1.toFloat(), y1.toFloat(), x2.toFloat(), y2.toFloat(), durationMs.toLong()) { success ->
+                println("[DeviceController] 滑动${if (success) "成功" else "失败"}")
+            }
+        } else {
+            println("[DeviceController] 无障碍服务不可用，降级使用 Shizuku")
+            exec("input swipe $x1 $y1 $x2 $y2 $durationMs")
+        }
     }
 
     /**

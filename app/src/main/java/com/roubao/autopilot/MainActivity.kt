@@ -20,7 +20,9 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.lifecycleScope
@@ -75,6 +77,14 @@ class MainActivity : ComponentActivity() {
     // 是否需要跳转到记录详情（悬浮窗停止后触发）
     private val shouldNavigateToRecord = mutableStateOf(false)
 
+    // 应用列表权限请求状态
+    private val showAppListPermissionDialog = mutableStateOf(false)
+    private val pendingInstruction = mutableStateOf<String?>(null)
+
+    // 无障碍服务状态
+    private val accessibilityServiceEnabled = mutableStateOf(false)
+    private val showAccessibilityDialog = mutableStateOf(false)
+
     private val binderReceivedListener = Shizuku.OnBinderReceivedListener {
         Log.d(TAG, "Shizuku binder received")
         shizukuAvailable.value = true
@@ -94,8 +104,12 @@ class MainActivity : ComponentActivity() {
     private val permissionResultListener = Shizuku.OnRequestPermissionResultListener { _, grantResult ->
         Log.d(TAG, "Shizuku permission result: $grantResult")
         if (grantResult == PackageManager.PERMISSION_GRANTED) {
+            Log.d(TAG, "Permission granted, binding service")
             deviceController.bindService()
             Toast.makeText(this, "Shizuku 权限已获取", Toast.LENGTH_SHORT).show()
+        } else {
+            Log.d(TAG, "Permission denied")
+            Toast.makeText(this, "Shizuku 权限被拒绝", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -337,6 +351,55 @@ class MainActivity : ComponentActivity() {
         if (showShizukuHelpDialog) {
             ShizukuHelpDialog(onDismiss = { showShizukuHelpDialog = false })
         }
+
+        // 应用列表权限请求对话框
+        if (showAppListPermissionDialog.value) {
+            AppListPermissionDialog(
+                onDismiss = {
+                    showAppListPermissionDialog.value = false
+                    pendingInstruction.value = null
+                },
+                onContinue = {
+                    showAppListPermissionDialog.value = false
+                    val instruction = pendingInstruction.value
+                    pendingInstruction.value = null
+                    if (instruction != null) {
+                        runAgent(
+                            instruction = instruction,
+                            apiKey = settings.apiKey,
+                            baseUrl = settings.baseUrl,
+                            model = settings.model,
+                            maxSteps = settings.maxSteps,
+                            isGUIAgent = settings.currentProvider.isGUIAgent,
+                            providerId = settings.currentProviderId,
+                            skipAppListCheck = true
+                        )
+                    }
+                },
+                onOpenSettings = {
+                    val intent = android.content.Intent(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:$packageName")
+                    )
+                    startActivity(intent)
+                }
+            )
+        }
+
+        // 无障碍服务请求对话框
+        if (showAccessibilityDialog.value) {
+            AccessibilityPermissionDialog(
+                onDismiss = {
+                    showAccessibilityDialog.value = false
+                },
+                onOpenSettings = {
+                    val intent = android.content.Intent(
+                        Settings.ACTION_ACCESSIBILITY_SETTINGS
+                    )
+                    startActivity(intent)
+                }
+            )
+        }
     }
 
     private fun deleteRecord(id: String) {
@@ -439,7 +502,8 @@ class MainActivity : ComponentActivity() {
         model: String,
         maxSteps: Int,
         isGUIAgent: Boolean = false,
-        providerId: String = ""
+        providerId: String = "",
+        skipAppListCheck: Boolean = false
     ) {
         if (instruction.isBlank()) {
             Toast.makeText(this, "请输入指令", Toast.LENGTH_SHORT).show()
@@ -461,6 +525,24 @@ class MainActivity : ComponentActivity() {
             )
             startActivity(intent)
             return
+        }
+
+        // 检查无障碍服务
+        if (!deviceController.isAccessibilityAvailable()) {
+            showAccessibilityDialog.value = true
+            return
+        }
+
+        // 检查应用列表权限
+        if (!skipAppListCheck) {
+            val appScanner = AppScanner(this)
+            val apps = appScanner.getApps()
+            if (apps.size < 2) {
+                // 应用列表少于2个，可能无法获取应用列表权限
+                pendingInstruction.value = instruction
+                showAppListPermissionDialog.value = true
+                return
+            }
         }
 
         // 立即设置执行状态为 true，显示停止按钮
@@ -622,4 +704,157 @@ class MainActivity : ComponentActivity() {
         }
         return if (instruction.length > 10) instruction.take(10) + "..." else instruction
     }
+}
+
+/**
+ * 应用列表权限请求对话框
+ */
+@Composable
+fun AppListPermissionDialog(
+    onDismiss: () -> Unit,
+    onContinue: () -> Unit,
+    onOpenSettings: () -> Unit
+) {
+    val colors = BaoziTheme.colors
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = colors.backgroundCard,
+        icon = {
+            Icon(
+                imageVector = Icons.Default.Warning,
+                contentDescription = null,
+                tint = colors.primary,
+                modifier = Modifier.size(48.dp)
+            )
+        },
+        title = {
+            Text(
+                "无法获取应用列表",
+                color = colors.textPrimary,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column {
+                Text(
+                    text = "检测到应用列表数量异常，可能缺少相关权限。",
+                    fontSize = 14.sp,
+                    color = colors.textPrimary,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+                Text(
+                    text = "这可能影响 AI 识别和操作应用的能力。",
+                    fontSize = 13.sp,
+                    color = colors.textSecondary,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                Text(
+                    text = "建议前往设置页面检查权限配置。",
+                    fontSize = 13.sp,
+                    color = colors.textSecondary
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onOpenSettings,
+                colors = ButtonDefaults.buttonColors(containerColor = colors.primary),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("前往设置", color = Color.White, fontSize = 14.sp)
+            }
+        },
+        dismissButton = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = onContinue,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colors.backgroundInput
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("继续执行", color = colors.textPrimary, fontSize = 14.sp)
+                }
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("取消", color = colors.textSecondary, fontSize = 14.sp)
+                }
+            }
+        }
+    )
+}
+
+/**
+ * 无障碍服务权限请求对话框
+ */
+@Composable
+fun AccessibilityPermissionDialog(
+    onDismiss: () -> Unit,
+    onOpenSettings: () -> Unit
+) {
+    val colors = BaoziTheme.colors
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = colors.backgroundCard,
+        icon = {
+            Icon(
+                imageVector = Icons.Default.Settings,
+                contentDescription = null,
+                tint = colors.primary,
+                modifier = Modifier.size(48.dp)
+            )
+        },
+        title = {
+            Text(
+                "开启无障碍服务",
+                color = colors.textPrimary,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column {
+                Text(
+                    text = "肉包需要无障碍服务来执行点击、滑动等操作。",
+                    fontSize = 14.sp,
+                    color = colors.textPrimary,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+                Text(
+                    text = "请前往设置页面开启「肉包」无障碍服务。",
+                    fontSize = 13.sp,
+                    color = colors.textSecondary,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                Text(
+                    text = "开启后即可正常使用自动化功能。",
+                    fontSize = 13.sp,
+                    color = colors.textSecondary
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onOpenSettings,
+                colors = ButtonDefaults.buttonColors(containerColor = colors.primary),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("前往设置", color = Color.White, fontSize = 14.sp)
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("取消", color = colors.textSecondary, fontSize = 14.sp)
+            }
+        }
+    )
 }

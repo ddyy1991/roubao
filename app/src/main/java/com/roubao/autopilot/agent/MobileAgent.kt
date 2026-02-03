@@ -384,6 +384,35 @@ class MobileAgent(
 
                 // 7. 执行动作
                 log("执行动作: ${action.type}")
+
+                // 检查服务是否可用（优先使用无障碍服务）
+                if (!controller.isAvailable()) {
+                    val hasAccessibility = controller.isAccessibilityAvailable()
+
+                    if (hasAccessibility) {
+                        log("✅ 使用无障碍服务执行操作")
+                    } else {
+                        log("⚠️ 无障碍服务和 Shizuku 都不可用，尝试绑定 Shizuku...")
+                        controller.bindService()
+
+                        // 等待绑定完成（最多等待 3 秒）
+                        var bound = false
+                        repeat(6) {
+                            delay(500)
+                            if (controller.isAvailable()) {
+                                bound = true
+                                return@repeat
+                            }
+                        }
+
+                        if (!bound) {
+                            log("❌ 服务不可用，跳过此动作")
+                            continue
+                        }
+                        log("✅ Shizuku 服务绑定成功")
+                    }
+                }
+
                 OverlayService.update("${action.type}: ${executorResult.description.take(15)}...")
                 executeAction(action, infoPool)
                 infoPool.lastAction = action
@@ -971,11 +1000,13 @@ class MobileAgent(
             "click" -> {
                 val x = mapCoordinate(action.x ?: 0, screenWidth)
                 val y = mapCoordinate(action.y ?: 0, screenHeight)
+                log("点击: ($x, $y), 屏幕尺寸: ${screenWidth}x${screenHeight}")
                 controller.tap(x, y)
             }
             "tap" -> {
                 val x = mapCoordinate(action.x ?: 0, screenWidth)
                 val y = mapCoordinate(action.y ?: 0, screenHeight)
+                log("点击: ($x, $y), 屏幕尺寸: ${screenWidth}x${screenHeight}")
                 controller.tap(x, y)
             }
             "back" -> {

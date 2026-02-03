@@ -157,4 +157,12 @@
     <string name="toast_sensitive_page">检测到敏感页面（支付/密码），已安全停止</string>
     <string name="toast_max_steps">达到最大步数限制</string>
     <string name="toast_error">错误: %1$s</string>
+
+    <!-- Accessibility Service -->
+    <string name="accessibility_service_description">肉包无障碍服务，用于执行自动化操作</string>
+    <string name="accessibility_enabled">无障碍服务已启用</string>
+    <string name="accessibility_disabled">无障碍服务未启用</string>
+    <string name="accessibility_enable_title">开启无障碍服务</string>
+    <string name="accessibility_enable_desc">肉包需要无障碍服务来执行点击、滑动等操作。请开启「肉包」无障碍服务。</string>
+    <string name="btn_open_settings">打开设置</string>
 </resources>
